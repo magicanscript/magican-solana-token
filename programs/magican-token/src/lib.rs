@@ -14,7 +14,7 @@ declare_id!("BcyHy9xz3kvthmvc2WFQRYGoFfzCAQcpLxVC7d1zPjQD");
 pub mod magican_token {
     use super::*;
 
-    /// Создаёт минт — "фабрику" токена
+    /// Creates the mint account — the token factory.
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
         emit!(MintInitialized {
             mint: ctx.accounts.mint.key(),
@@ -26,7 +26,7 @@ pub mod magican_token {
         Ok(())
     }
 
-    /// Выпускает токены на указанный аккаунт
+    /// Mints tokens to the authority's associated token account.
     pub fn mint_token(ctx: Context<MintToken>, amount: u64) -> Result<()> {
         require!(amount > 0, MagicanError::ZeroAmount);
 
@@ -46,15 +46,11 @@ pub mod magican_token {
             amount,
         });
 
-        msg!(
-            "Minted {} tokens to {}",
-            amount,
-            ctx.accounts.token_account.key()
-        );
+        msg!("Minted {} tokens to {}", amount, ctx.accounts.token_account.key());
         Ok(())
     }
 
-    /// Сжигает токены с аккаунта
+    /// Burns tokens from the authority's associated token account.
     pub fn burn_token(ctx: Context<BurnToken>, amount: u64) -> Result<()> {
         require!(amount > 0, MagicanError::ZeroAmount);
 
@@ -78,7 +74,7 @@ pub mod magican_token {
         Ok(())
     }
 
-    /// Переводит токены между аккаунтами
+    /// Transfers tokens from the authority's ATA to the recipient's ATA.
     pub fn transfer_token(ctx: Context<TransferToken>, amount: u64) -> Result<()> {
         require!(amount > 0, MagicanError::ZeroAmount);
 
@@ -104,7 +100,7 @@ pub mod magican_token {
 }
 
 // ───────────────────────────────────────────
-// Аккаунты
+// Account contexts
 // ───────────────────────────────────────────
 
 #[derive(Accounts)]
@@ -133,6 +129,7 @@ pub struct MintToken<'info> {
     )]
     pub mint: Account<'info, Mint>,
 
+    // Created automatically if it does not exist yet.
     #[account(
         init_if_needed,
         payer = authority,
@@ -175,6 +172,7 @@ pub struct TransferToken<'info> {
     )]
     pub from_account: Account<'info, TokenAccount>,
 
+    // Created automatically if the recipient has no ATA for this mint yet.
     #[account(
         init_if_needed,
         payer = authority,
@@ -185,7 +183,7 @@ pub struct TransferToken<'info> {
 
     pub mint: Account<'info, Mint>,
 
-    /// CHECK: получатель — просто адрес, не подписывает
+    /// CHECK: recipient is a plain address, not required to sign.
     pub recipient: UncheckedAccount<'info>,
 
     #[account(mut)]

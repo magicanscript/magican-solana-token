@@ -1,73 +1,57 @@
 # magican-token
 
-Простой Solana-токен на Anchor 1.0 для портфолио. 4 инструкции: initialize, mint, burn, transfer.
+A Solana SPL token program built with Anchor 1.0. Implements four on-chain instructions: initialize, mint, burn, and transfer.
 
-## Требования
+## Program
 
-- Rust (`rustup`)
-- Solana CLI (`solana-test-validator`)
-- Anchor CLI ≥ 0.31 (`anchor --version`)
-- Node.js 18+ и yarn
+| Network | Address |
+|---------|---------|
+| localnet | `BcyHy9xz3kvthmvc2WFQRYGoFfzCAQcpLxVC7d1zPjQD` |
 
-## Установка
+## Instructions
+
+| Instruction | Description |
+|-------------|-------------|
+| `initialize` | Creates the mint account with 9 decimals |
+| `mint_token` | Mints tokens to the authority's ATA (creates it if needed) |
+| `burn_token` | Burns tokens from the authority's ATA |
+| `transfer_token` | Transfers tokens to a recipient's ATA (creates it if needed) |
+
+## Requirements
+
+- Rust (via `rustup`) — pinned to `1.89.0` in `rust-toolchain.toml`
+- Solana CLI with `solana-test-validator`
+- Anchor CLI `1.0.2`
+- Node.js 18+ and yarn
+
+## Getting Started
 
 ```bash
+# Install JS dependencies
 yarn install
 
-magican-token/
-├── .gitignore                      ← исключения для git
-├── .prettierignore
-├── .mocharc.json                   ← конфиг mocha (require: ts-node/register)
-├── Anchor.toml                     ← конфиг Anchor (cluster, scripts, programs)
-├── Cargo.toml                      ← workspace root
-├── Cargo.lock
-├── package.json                    ← npm-зависимости + scripts
-├── yarn.lock
-├── tsconfig.json                   ← TypeScript config
-├── rust-toolchain.toml             ← фиксирует версию Rust
-│
-├── README.md                       ← (см. ниже — нужно создать)
-├── REFACTORING_REPORT.md           ← отчёт о рефакторинге
-├── TESTS_REPORT.md                 ← отчёт о тестах
-│
-├── app/                            ← (пустая папка — заготовка под frontend)
-│   └── .gitkeep
-├── migrations/
-│   └── deploy.ts                   ← деплой-скрипт Anchor
-│
-├── programs/
-│   └── magican-token/
-│       ├── Cargo.toml              ← зависимости программы (anchor-lang, anchor-spl)
-│       └── src/
-│           ├── lib.rs              ← все 4 инструкции (initialize, mint_token, burn_token, transfer_token)
-│           ├── errors.rs           ← MagicanError enum
-│           └── events.rs           ← события Anchor
-│
-├── tests/
-│   └── magican-token.ts            ← 7 интеграционных тестов (mocha + chai)
-│
-└── target/                         ← НЕ в git (в .gitignore)
-    └── deploy/magican_token.so     ← собранная программа
+# Build the program
+anchor build
 
+# Run tests against localnet (starts validator automatically)
+anchor test
+```
 
-Попытки запуска `anchor test`
-
-| # | Ошибка | Что сделано |
-|---|--------|-------------|
-| 1 | `Account allocation failed` — деплоил на devnet вместо localnet | Не решена через конфиг (оставлено пользователю) |
-| 2 | `ts-mocha: command not found` | Заменил на `npx ts-mocha`, потом на `npx mocha` + `.mocharc.json` |
-| 3 | `yargs: require is not defined in ES module scope` (Node 26 + yargs@16) | Обновил `mocha` с 9 → 11.7.0 |
-| 4 | `Cannot find module 'ts-node/register'` | Переустановил `ts-node@10.9.2` |
-| 5 | **`'tokenProgram' does not exist in type 'ResolvedAccounts'`** | **Не решена** — нужно проверить IDL, что там ожидается |
-
-### Текущее состояние
+## Test Results
 
 ```
-✗ tests/magican-token.ts:70:9 - error TS2353: 'tokenProgram' does not exist in type 'ResolvedAccounts<...>'
+7 passing
+  ✔ initialize — creates mint with 9 decimals
+  ✔ mint_token — mints tokens to authority ATA
+  ✔ mint_token — rejects zero amount
+  ✔ burn_token — burns tokens from authority ATA
+  ✔ burn_token — rejects unauthorized user
+  ✔ transfer_token — transfers to new ATA via init_if_needed
+  ✔ transfer_token — rejects zero amount
+```
 
-Что точно работает
+## Stack
 
-- Программа компилируется (`anchor build` → success)
-- IDL/типы должны генерироваться автоматически (но `target/` не виден из моих инструментов — стоит проверить руками)
-- TypeScript-тесты написаны, синтаксис валиден
-- Все остальные зависимости установлены корректно
+- [Anchor 1.0](https://www.anchor-lang.com/) — Solana program framework
+- [anchor-spl](https://docs.rs/anchor-spl) — SPL Token CPI helpers
+- Mocha + Chai — integration tests

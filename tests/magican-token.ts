@@ -3,7 +3,7 @@ import { Program } from "@anchor-lang/core";
 import { assert } from "chai";
 import { MagicanToken } from "../target/types/magican_token";
 
-const { PublicKey, Keypair, SystemProgram, SYSVAR_RENT_PUBKEY } = anchor.web3;
+const { PublicKey, Keypair } = anchor.web3;
 const TOKEN_PROGRAM_ID = new PublicKey(
   "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 );
@@ -14,11 +14,9 @@ const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey(
 const DECIMALS = 9;
 const toUnits = (n: number) => n * 10 ** DECIMALS;
 
-// Минимальный парсер TokenAccount (SPL Token Program layout):
-//   amount (8 bytes LE u64), mint (32), owner (32), ...
-// Нам нужен только amount для проверки баланса.
+// SPL TokenAccount layout: mint (32 bytes), owner (32 bytes), amount (8 bytes u64 LE) at offset 64.
 function readTokenAmount(data: Buffer): bigint {
-  return data.readBigUInt64LE(0);
+  return data.readBigUInt64LE(64);
 }
 
 describe("magican-token", () => {
@@ -34,7 +32,7 @@ describe("magican-token", () => {
   const userA = Keypair.generate();
   const userB = Keypair.generate();
 
-  // PDA ATA: derive по (mint, owner) — для проверки баланса в тестах.
+  // Derive ATAs locally to verify balances without fetching via the program client.
   const ataA = PublicKey.findProgramAddressSync(
     [wallet.publicKey.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
     ASSOCIATED_TOKEN_PROGRAM_ID
@@ -61,58 +59,49 @@ describe("magican-token", () => {
   // ───────────────────────────────────────────
   // initialize
   // ───────────────────────────────────────────
-  it("initialize — создаёт минт с 9 decimals", async () => {
+  it("initialize — creates mint with 9 decimals", async () => {
     await program.methods
       .initialize()
       .accounts({
         mint: mint,
         authority: wallet.publicKey,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-        rent: SYSVAR_RENT_PUBKEY,
       })
       .signers([mintKeypair])
       .rpc();
 
     const mintInfo = await provider.connection.getAccountInfo(mint);
-    assert.isNotNull(mintInfo, "mint account должен существовать");
+    assert.isNotNull(mintInfo, "mint account should exist");
     assert.isTrue(mintInfo!.owner.equals(TOKEN_PROGRAM_ID));
   });
 
   // ───────────────────────────────────────────
   // mint_token
   // ───────────────────────────────────────────
-  it("mint_token — выпускает токены на ATA authority", async () => {
+  it("mint_token — mints tokens to authority ATA", async () => {
     const amount = toUnits(100);
     await program.methods
       .mintToken(new anchor.BN(amount))
       .accounts({
         mint: mint,
         authority: wallet.publicKey,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
       })
       .rpc();
 
     const accInfo = await provider.connection.getAccountInfo(ataA);
-    assert.isNotNull(accInfo, "ATA authority должен быть создан");
+    assert.isNotNull(accInfo, "authority ATA should be created");
     assert.equal(readTokenAmount(accInfo!.data).toString(), amount.toString());
   });
 
-  it("mint_token — отклоняет ZeroAmount", async () => {
+  it("mint_token — rejects zero amount", async () => {
     try {
       await program.methods
         .mintToken(new anchor.BN(0))
         .accounts({
           mint: mint,
           authority: wallet.publicKey,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
         })
         .rpc();
-      assert.fail("должен был упасть с ZeroAmount");
+      assert.fail("should have thrown ZeroAmount");
     } catch (err) {
       assert.include(String(err), "Amount must be greater than zero");
     }
@@ -121,7 +110,7 @@ describe("magican-token", () => {
   // ───────────────────────────────────────────
   // burn_token
   // ───────────────────────────────────────────
-  it("burn_token — сжигает токены с ATA authority", async () => {
+  it("burn_token — burns tokens from authority ATA", async () => {
     const accBefore = await provider.connection.getAccountInfo(ataA);
     assert.isNotNull(accBefore);
     const before = readTokenAmount(accBefore!.data);
@@ -132,8 +121,6 @@ describe("magican-token", () => {
       .accounts({
         mint: mint,
         authority: wallet.publicKey,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       })
       .rpc();
 
@@ -143,29 +130,27 @@ describe("magican-token", () => {
     assert.equal(after.toString(), (before - BigInt(burnAmount)).toString());
   });
 
-  it("burn_token — отклоняет попытку чужого пользователя", async () => {
-    // userA не владеет ataA (он принадлежит wallet), SPL отклонит транзакцию.
+  it("burn_token — rejects unauthorized user", async () => {
+    // userA does not own ataA (it belongs to wallet), so SPL will reject the tx.
     try {
       await program.methods
         .burnToken(new anchor.BN(1))
         .accounts({
           mint: mint,
           authority: userA.publicKey,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         })
         .signers([userA])
         .rpc();
-      assert.fail("должен был упасть — userA не владелец ATA");
+      assert.fail("should have thrown — userA does not own the ATA");
     } catch (err) {
-      assert.isOk(err, "транзакция должна быть отклонена");
+      assert.isOk(err, "transaction should be rejected");
     }
   });
 
   // ───────────────────────────────────────────
   // transfer_token
   // ───────────────────────────────────────────
-  it("transfer_token — переводит токены на новый ATA (init_if_needed)", async () => {
+  it("transfer_token — transfers to new ATA via init_if_needed", async () => {
     const transferAmount = toUnits(30);
     await program.methods
       .transferToken(new anchor.BN(transferAmount))
@@ -173,21 +158,18 @@ describe("magican-token", () => {
         mint: mint,
         recipient: userB.publicKey,
         authority: wallet.publicKey,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
       })
       .rpc();
 
     const accB = await provider.connection.getAccountInfo(ataB);
-    assert.isNotNull(accB, "ATA userB должен быть создан через init_if_needed");
+    assert.isNotNull(accB, "userB ATA should be created via init_if_needed");
     assert.equal(
       readTokenAmount(accB!.data).toString(),
       transferAmount.toString()
     );
   });
 
-  it("transfer_token — отклоняет ZeroAmount", async () => {
+  it("transfer_token — rejects zero amount", async () => {
     try {
       await program.methods
         .transferToken(new anchor.BN(0))
@@ -195,12 +177,9 @@ describe("magican-token", () => {
           mint: mint,
           recipient: userB.publicKey,
           authority: wallet.publicKey,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
         })
         .rpc();
-      assert.fail("должен был упасть с ZeroAmount");
+      assert.fail("should have thrown ZeroAmount");
     } catch (err) {
       assert.include(String(err), "Amount must be greater than zero");
     }

@@ -8,7 +8,7 @@ pub mod events;
 use crate::errors::MagicanError;
 use crate::events::{MintInitialized, TokensBurned, TokensMinted, TokensTransferred};
 
-declare_id!("BcyHy9xz3kvthmvc2WFQRYGoFfzCAQcpLxVC7d1zPjQD");
+declare_id!("EaQA46S3p1opE1Q4oNTh7xpresSTvuNDa9NSJMbXj5YB");
 
 #[program]
 pub mod magican_token {
@@ -46,7 +46,11 @@ pub mod magican_token {
             amount,
         });
 
-        msg!("Minted {} tokens to {}", amount, ctx.accounts.token_account.key());
+        msg!(
+            "Minted {} tokens to {}",
+            amount,
+            ctx.accounts.token_account.key()
+        );
         Ok(())
     }
 

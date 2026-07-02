@@ -2,7 +2,9 @@
 
 A Solana SPL token program built with Anchor 1.0. Implements four on-chain instructions: initialize, mint, burn, and transfer.
 
+
 Deployed on **Solana devnet**: `EaQA46S3p1opE1Q4oNTh7xpresSTvuNDa9NSJMbXj5YB` — [View on Solana Explorer](https://explorer.solana.com/address/EaQA46S3p1opE1Q4oNTh7xpresSTvuNDa9NSJMbXj5YB?cluster=devnet)
+
 
 ## Instructions
 

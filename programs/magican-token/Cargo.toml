@@ -1,8 +1,9 @@
 [package]
 name = "magican-token"
 version = "0.1.0"
-description = "Created with Anchor"
+description = "SPL token program: mint, burn, and transfer with event emission"
 edition = "2021"
+license = "MIT"
 
 [lib]
 crate-type = ["cdylib", "lib"]
@@ -28,3 +29,9 @@ anchor-spl = { version = "1.0.2", features = ["associated_token"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
+
+[lints.clippy]
+# Anchor's #[program] macro emits `let __type_check_arg: T = panic!();` to check
+# instruction argument types at compile time. That code is generated outside the
+# annotated module, so a local #[allow] cannot reach it — it has to be set here.
+diverging_sub_expression = "allow"

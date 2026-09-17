@@ -1,0 +1,5 @@
+# Test code may unwrap/expect freely — a panic in a test is a failed assertion,
+# not a production fault. Outside tests the workspace lints in Cargo.toml
+# (unwrap_used / expect_used) apply.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

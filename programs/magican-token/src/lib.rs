@@ -1,12 +1,19 @@
 use anchor_lang::prelude::*;
-use anchor_spl::associated_token::AssociatedToken;
-use anchor_spl::token::{self, Burn, Mint, MintTo, Token, TokenAccount, Transfer};
+use anchor_spl::token::spl_token::instruction::AuthorityType;
+use anchor_spl::token::{self, Burn, MintTo, SetAuthority, TransferChecked};
 
+pub mod contexts;
 pub mod errors;
 pub mod events;
+pub mod state;
 
+use crate::contexts::*;
 use crate::errors::MagicanError;
-use crate::events::{MintInitialized, TokensBurned, TokensMinted, TokensTransferred};
+use crate::events::{
+    AdminChanged, AdminProposed, MintAuthorityRevoked, MintInitialized, TokensBurned, TokensMinted,
+    TokensTransferred,
+};
+use crate::state::{CONFIG_SEED, DECIMALS, MAX_SUPPLY};
 
 declare_id!("EaQA46S3p1opE1Q4oNTh7xpresSTvuNDa9NSJMbXj5YB");
 
@@ -14,29 +21,46 @@ declare_id!("EaQA46S3p1opE1Q4oNTh7xpresSTvuNDa9NSJMbXj5YB");
 pub mod magican_token {
     use super::*;
 
-    /// Creates the mint account — the token factory.
+    /// Creates the config and the canonical mint. Can only ever succeed once.
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        config.admin = ctx.accounts.admin.key();
+        config.pending_admin = None;
+        config.bump = ctx.bumps.config;
+        config.mint_bump = ctx.bumps.mint;
+
         emit!(MintInitialized {
             mint: ctx.accounts.mint.key(),
-            authority: ctx.accounts.authority.key(),
+            admin: config.admin,
+            max_supply: MAX_SUPPLY,
         });
 
-        msg!("Magican Token mint initialized!");
-        msg!("Mint address: {}", ctx.accounts.mint.key());
+        msg!("Magican Token initialized, max supply {}", MAX_SUPPLY);
         Ok(())
     }
 
-    /// Mints tokens to the authority's associated token account.
+    /// Mints tokens to the admin's associated token account.
     pub fn mint_token(ctx: Context<MintToken>, amount: u64) -> Result<()> {
         require!(amount > 0, MagicanError::ZeroAmount);
 
-        let cpi_ctx = CpiContext::new(
+        // Computed before the CPI: after it, the cached `supply` is stale.
+        let new_supply = ctx
+            .accounts
+            .mint
+            .supply
+            .checked_add(amount)
+            .ok_or(MagicanError::MathOverflow)?;
+        require!(new_supply <= MAX_SUPPLY, MagicanError::SupplyCapExceeded);
+
+        let signer_seeds: &[&[&[u8]]] = &[&[CONFIG_SEED, &[ctx.accounts.config.bump]]];
+        let cpi_ctx = CpiContext::new_with_signer(
             ctx.accounts.token_program.key(),
             MintTo {
                 mint: ctx.accounts.mint.to_account_info(),
                 to: ctx.accounts.token_account.to_account_info(),
-                authority: ctx.accounts.authority.to_account_info(),
+                authority: ctx.accounts.config.to_account_info(),
             },
+            signer_seeds,
         );
         token::mint_to(cpi_ctx, amount)?;
 
@@ -44,17 +68,14 @@ pub mod magican_token {
             mint: ctx.accounts.mint.key(),
             to: ctx.accounts.token_account.key(),
             amount,
+            new_supply,
         });
 
-        msg!(
-            "Minted {} tokens to {}",
-            amount,
-            ctx.accounts.token_account.key()
-        );
+        msg!("Minted {}, supply now {}", amount, new_supply);
         Ok(())
     }
 
-    /// Burns tokens from the authority's associated token account.
+    /// Burns tokens from the signer's own associated token account.
     pub fn burn_token(ctx: Context<BurnToken>, amount: u64) -> Result<()> {
         require!(amount > 0, MagicanError::ZeroAmount);
 
@@ -63,7 +84,7 @@ pub mod magican_token {
             Burn {
                 mint: ctx.accounts.mint.to_account_info(),
                 from: ctx.accounts.token_account.to_account_info(),
-                authority: ctx.accounts.authority.to_account_info(),
+                authority: ctx.accounts.owner.to_account_info(),
             },
         );
         token::burn(cpi_ctx, amount)?;
@@ -74,126 +95,91 @@ pub mod magican_token {
             amount,
         });
 
-        msg!("Burned {} tokens", amount);
+        msg!("Burned {}", amount);
         Ok(())
     }
 
-    /// Transfers tokens from the authority's ATA to the recipient's ATA.
+    /// Transfers tokens to the recipient's associated token account.
     pub fn transfer_token(ctx: Context<TransferToken>, amount: u64) -> Result<()> {
         require!(amount > 0, MagicanError::ZeroAmount);
 
         let cpi_ctx = CpiContext::new(
             ctx.accounts.token_program.key(),
-            Transfer {
+            TransferChecked {
                 from: ctx.accounts.from_account.to_account_info(),
+                mint: ctx.accounts.mint.to_account_info(),
                 to: ctx.accounts.to_account.to_account_info(),
-                authority: ctx.accounts.authority.to_account_info(),
+                authority: ctx.accounts.owner.to_account_info(),
             },
         );
-        token::transfer(cpi_ctx, amount)?;
+        token::transfer_checked(cpi_ctx, amount, DECIMALS)?;
 
         emit!(TokensTransferred {
+            mint: ctx.accounts.mint.key(),
             from: ctx.accounts.from_account.key(),
             to: ctx.accounts.to_account.key(),
             amount,
         });
 
-        msg!("Transferred {} tokens", amount);
+        msg!("Transferred {}", amount);
         Ok(())
     }
-}
 
-// ───────────────────────────────────────────
-// Account contexts
-// ───────────────────────────────────────────
+    /// Nominates a new admin. Nothing changes until the nominee accepts.
+    pub fn propose_admin(ctx: Context<ProposeAdmin>, new_admin: Pubkey) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        config.pending_admin = Some(new_admin);
 
-#[derive(Accounts)]
-pub struct Initialize<'info> {
-    #[account(
-        init,
-        payer = authority,
-        mint::decimals = 9,
-        mint::authority = authority.key(),
-    )]
-    pub mint: Account<'info, Mint>,
+        emit!(AdminProposed {
+            current_admin: config.admin,
+            pending_admin: new_admin,
+        });
 
-    #[account(mut)]
-    pub authority: Signer<'info>,
+        msg!("Admin transfer proposed to {}", new_admin);
+        Ok(())
+    }
 
-    pub token_program: Program<'info, Token>,
-    pub system_program: Program<'info, System>,
-    pub rent: Sysvar<'info, Rent>,
-}
+    /// Completes an admin transfer proposed earlier.
+    pub fn accept_admin(ctx: Context<AcceptAdmin>) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        let previous_admin = config.admin;
 
-#[derive(Accounts)]
-pub struct MintToken<'info> {
-    #[account(
-        mut,
-        mint::authority = authority.key(),
-    )]
-    pub mint: Account<'info, Mint>,
+        config.admin = ctx.accounts.new_admin.key();
+        config.pending_admin = None;
 
-    // Created automatically if it does not exist yet.
-    #[account(
-        init_if_needed,
-        payer = authority,
-        associated_token::mint = mint,
-        associated_token::authority = authority,
-    )]
-    pub token_account: Account<'info, TokenAccount>,
+        emit!(AdminChanged {
+            previous_admin,
+            new_admin: config.admin,
+        });
 
-    #[account(mut)]
-    pub authority: Signer<'info>,
+        msg!("Admin changed to {}", config.admin);
+        Ok(())
+    }
 
-    pub token_program: Program<'info, Token>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
-    pub system_program: Program<'info, System>,
-}
+    /// Permanently revokes the mint authority, freezing total supply.
+    ///
+    /// One-way: once the SPL mint authority is `None`, nothing — including a
+    /// program upgrade — can restore it.
+    pub fn revoke_mint_authority(ctx: Context<RevokeMintAuthority>) -> Result<()> {
+        let final_supply = ctx.accounts.mint.supply;
 
-#[derive(Accounts)]
-pub struct BurnToken<'info> {
-    #[account(mut)]
-    pub mint: Account<'info, Mint>,
+        let signer_seeds: &[&[&[u8]]] = &[&[CONFIG_SEED, &[ctx.accounts.config.bump]]];
+        let cpi_ctx = CpiContext::new_with_signer(
+            ctx.accounts.token_program.key(),
+            SetAuthority {
+                current_authority: ctx.accounts.config.to_account_info(),
+                account_or_mint: ctx.accounts.mint.to_account_info(),
+            },
+            signer_seeds,
+        );
+        token::set_authority(cpi_ctx, AuthorityType::MintTokens, None)?;
 
-    #[account(
-        mut,
-        associated_token::mint = mint,
-        associated_token::authority = authority,
-    )]
-    pub token_account: Account<'info, TokenAccount>,
+        emit!(MintAuthorityRevoked {
+            mint: ctx.accounts.mint.key(),
+            final_supply,
+        });
 
-    pub authority: Signer<'info>,
-    pub token_program: Program<'info, Token>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
-}
-
-#[derive(Accounts)]
-pub struct TransferToken<'info> {
-    #[account(
-        mut,
-        associated_token::mint = mint,
-        associated_token::authority = authority,
-    )]
-    pub from_account: Account<'info, TokenAccount>,
-
-    // Created automatically if the recipient has no ATA for this mint yet.
-    #[account(
-        init_if_needed,
-        payer = authority,
-        associated_token::mint = mint,
-        associated_token::authority = recipient,
-    )]
-    pub to_account: Account<'info, TokenAccount>,
-
-    pub mint: Account<'info, Mint>,
-
-    /// CHECK: recipient is a plain address, not required to sign.
-    pub recipient: UncheckedAccount<'info>,
-
-    #[account(mut)]
-    pub authority: Signer<'info>,
-
-    pub token_program: Program<'info, Token>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
-    pub system_program: Program<'info, System>,
+        msg!("Mint authority revoked, supply frozen at {}", final_supply);
+        Ok(())
+    }
 }

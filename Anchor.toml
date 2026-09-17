@@ -6,11 +6,14 @@ package_manager = "yarn"
 resolution = true
 skip-lint = false
 
+[programs.localnet]
+magican_token = "EaQA46S3p1opE1Q4oNTh7xpresSTvuNDa9NSJMbXj5YB"
+
 [programs.devnet]
 magican_token = "EaQA46S3p1opE1Q4oNTh7xpresSTvuNDa9NSJMbXj5YB"
 
 [provider]
-cluster = "devnet"
+cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]

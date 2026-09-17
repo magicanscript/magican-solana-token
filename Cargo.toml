@@ -4,6 +4,19 @@ members = [
 ]
 resolver = "2"
 
+[workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
+
+[workspace.lints.clippy]
+# Enforced project-wide: outside tests, propagate errors with Result/Option and `?`
+# instead of unwrapping. See clippy.toml for the test-code carve-out.
+unwrap_used = "warn"
+expect_used = "warn"
+# Anchor's #[program] macro emits `let __type_check_arg: T = panic!();` to check
+# instruction argument types at compile time. That code is generated outside the
+# annotated module, so a local #[allow] cannot reach it — it has to be set here.
+diverging_sub_expression = "allow"
+
 [profile.release]
 overflow-checks = true
 lto = "fat"
